@@ -6,7 +6,7 @@ import datetime
 import subprocess
 
 class IMessageAPI:
-    def init(self, db_location: str = '~/Library/Messages/chat.db'):
+    def __init__(self, db_location: str = '~/Library/Messages/chat.db') -> None:
         """
         Initialize the IMessageAPI.
 
@@ -30,7 +30,7 @@ class IMessageAPI:
             self.conn = sqlite3.connect(self.db_location)
         return self.conn
 
-    def _close(self):
+    def _close(self) -> None:
         """
         Close the database connection if it's open.
         """
@@ -38,7 +38,7 @@ class IMessageAPI:
             self.conn.close()
             self.conn = None
 
-    def _execute_query(self, query: str, params: tuple = ()):
+    def _execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
         """
         Execute an SQL query and return the results as a pandas DataFrame.
 
@@ -86,7 +86,7 @@ class IMessageAPI:
         """
         return self._execute_query(query)
 
-    def get_messages(self, recipient: Optional[str] = None, n: Optional[int] = None, is_group: bool = False) -> List[Dict]:
+    def get_messages(self, recipient: Optional[str] = None, n: Optional[int] = None) -> pd.DataFrame:
         """
         Retrieve chat messages with a specified recipient
 
@@ -104,10 +104,10 @@ class IMessageAPI:
         LEFT JOIN handle ON message.handle_id = handle.ROWID
         LEFT JOIN message_attachment_join ON message.ROWID = message_attachment_join.message_id
         LEFT JOIN attachment ON message_attachment_join.attachment_id = attachment.ROWID
-        ORDER BY message.date DESC
         """
         if recipient is not None:
             query += f" WHERE handle.id = '{recipient}'"
+        query += " ORDER BY message.date DESC"
         if n is not None:
             query += f" LIMIT {n}"
         
@@ -116,56 +116,62 @@ class IMessageAPI:
         # Process the data
         df['role'] = df['is_from_me'].apply(lambda x: 'Me' if x else 'Friend')
         df['message'] = df.apply(lambda x: self._extrace_my_message(x['attributedBody']) if x['is_from_me'] else x['text'], axis=1)
-        df['date_readable'] = df['date'].apply(lambda date: (
-            datetime.datetime.fromtimestamp(int((date + self._unix_timestamp) / 1000000000)) + datetime.timedelta(hours=8)
-        ).strftime("%Y-%m-%d %H:%M:%S"))
+        df['whole_message'] = df.apply(lambda x: '##{}\n{}'.format(x['subject'], x['message']) if x['subject'] is not None else x['message'], axis=1)
+        df['date_unixtime'] = df['date'].apply(lambda date: int(
+            (int((date + self._unix_timestamp) / 1000000000) + 8 * 3600)
+        ))
+        df['date_readable'] = df['date_unixtime'].apply(lambda unix_time: 
+            datetime.datetime.fromtimestamp(unix_time).strftime("%Y-%m-%d %H:%M:%S")
+        )
 
         # Process attachment information
-        df['has_attachment'] = df['filename'].notnull()
+        df.loc[df['is_audio_message'] == 1, 'mime_type'] = 'audio/audio_message'
+        df = df.rename(columns={"filename": "attachment_path"})
+        df['has_attachment'] = df['attachment_name'].notnull()
         df['attachment_type'] = df['mime_type'].apply(lambda x: x.split('/')[0] if x else None)
         df['attachment_size'] = df['total_bytes'].apply(lambda x: f"{x/1024/1024:.2f} MB" if x else None)
 
         return df   
 
 
-def send_message(self, content: str, recipient: str, message_type: Literal["text", "file"] = "text", is_group: bool = False) -> Tuple[bool, str]:
-    """
-    Send a message or file to a specified recipient or group.
+    def send_message(self, content: str, recipient: str, message_type: Literal["text", "file"] = "text", is_group: bool = False) -> Tuple[bool, str]:
+        """
+        Send a message or file to a specified recipient or group.
 
-    :param content: Content of the message or file path
-    :param recipient: Recipient's contact info (phone number, Apple ID, or group ID)
-    :param message_type: Type of message, can be 'text' or 'file' (including voice files)
-    :param is_group: Whether the recipient is a group
-    :return: Tuple of (success: bool, error_message: str)
-    """
-    if message_type == 'file':
-        pictures_dir = os.path.expanduser("~/Pictures")
-        if not content.startswith(pictures_dir):
-            print(f"Warning: File path should be in the Pictures directory: {pictures_dir}")
-        if not os.path.exists(content):
-            return False, f"File not found: {content}"
-        file_path = os.path.abspath(content)
-        command = f'send POSIX file "{file_path}"'
-    else:
-        temp_file = 'imessage_tmp.txt'
-        with open(temp_file, 'w') as f:
-            f.write(content)
-        file_path = os.path.abspath(temp_file)
-        command = f'send (read (POSIX file "{file_path}") as «class utf8»)'
+        :param content: Content of the message or file path
+        :param recipient: Recipient's contact info (phone number, Apple ID, or group ID)
+        :param message_type: Type of message, can be 'text' or 'file' (including voice files)
+        :param is_group: Whether the recipient is a group
+        :return: Tuple of (success: bool, error_message: str)
+        """
+        if message_type == 'file':
+            pictures_dir = os.path.expanduser("~/Pictures")
+            if not content.startswith(pictures_dir):
+                print(f"Warning: File path should be in the Pictures directory: {pictures_dir}")
+            if not os.path.exists(content):
+                return False, f"File not found: {content}"
+            file_path = os.path.abspath(content)
+            command = f'send POSIX file "{file_path}"'
+        else:
+            temp_file = 'imessage_tmp.txt'
+            with open(temp_file, 'w') as f:
+                f.write(content)
+            file_path = os.path.abspath(temp_file)
+            command = f'send (read (POSIX file "{file_path}") as «class utf8»)'
 
-    target = "chat" if is_group else "buddy"
-    full_command = f'tell application "Messages" to {command} to {target} "{recipient}"'
+        target = "chat" if is_group else "buddy"
+        full_command = f'tell application "Messages" to {command} to {target} "{recipient}"'
 
-    try:
-        subprocess.run(['osascript', '-e', full_command], check=True, capture_output=True, text=True)
-        success, error_message = True, ""
-    except subprocess.CalledProcessError as e:
-        success, error_message = False, e.stderr
+        try:
+            subprocess.run(['osascript', '-e', full_command], check=True, capture_output=True, text=True)
+            success, error_message = True, ""
+        except subprocess.CalledProcessError as e:
+            success, error_message = False, e.stderr
 
-    if message_type == "text":
-        os.remove(temp_file)
+        if message_type == "text":
+            os.remove(temp_file)
 
-    status = "Successfully sent" if success else "Failed to send"
-    print(f"{status} {message_type} to {recipient}. {error_message}")
+        status = "Successfully sent" if success else "Failed to send"
+        print(f"{status} {message_type} to {recipient}. {error_message}")
 
-    return success, error_message
+        return success, error_message

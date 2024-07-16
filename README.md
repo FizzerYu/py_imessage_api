@@ -26,17 +26,20 @@ This will install the package in editable mode, allowing you to make changes to 
 - Support for individual and group chats
 
 ## Usage
+Note: Some methods in this API return pandas DataFrames, allowing for easy data manipulation and analysis.
 
 Here's a basic example of how to use the IMessageAPI:
 
 ```python
 from py_imessage_api import IMessageAPI
+import pandas as pd
 
 # Initialize the API with the path to your iMessage database
 api = IMessageAPI("/Users/YourUsername/Library/Messages/chat.db")
 
-# Get all recipients
-recipients = api.get_all_recipients()
+# Get all recipients (returns a DataFrame)
+recipients_df: pd.DataFrame = api.get_all_recipients()
+print(recipients_df.head())  # Display the first few rows
 
 # Send a text message
 api.send_message("Hello, world!", "+1234567890")
@@ -44,8 +47,9 @@ api.send_message("Hello, world!", "+1234567890")
 # Send a file
 api.send_message("/Users/YourUsername/Pictures/image.jpg", "+1234567890", message_type="file")
 
-# Get the last 10 messages from a chat
-messages = api.get_messages("+1234567890", n=10)
+# Get the last 10 messages from a chat (returns a DataFrame)
+messages_df: pd.DataFrame = api.get_messages("+1234567890", n=10)
+print(messages_df.head())  # Display the first few rows
 ```
 
 ## Note
